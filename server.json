@@ -1,0 +1,11 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.agentstackd/directory",
+  "title": "AgentStackd AI Agent Directory",
+  "description": "Search and compare 77 hand-reviewed AI agents and tools: pricing model, limitations and sources.",
+  "version": "0.1.0",
+  "websiteUrl": "https://agentstackd.com/mcp/",
+  "remotes": [
+    { "type": "streamable-http", "url": "https://agentstackd.com/api/mcp" }
+  ]
+}

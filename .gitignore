@@ -1,0 +1,23 @@
+# Secrets and environment
+.env
+.env.*
+*.pem
+*.key
+registry-keys/
+
+# Vercel / deploy
+.vercel/
+
+# Logs and local scratch
+*.log
+logs/
+preview-tests.txt
+prod-*.txt
+submission-plan.md
+tune/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
