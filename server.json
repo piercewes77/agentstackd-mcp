@@ -3,9 +3,33 @@
   "name": "com.agentstackd/directory",
   "title": "AgentStackd AI Agent Directory",
   "description": "Search and compare 77 hand-reviewed AI agents and tools: pricing model, limitations and sources.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "websiteUrl": "https://agentstackd.com/mcp/",
+  "repository": {
+    "url": "https://github.com/piercewes77/agentstackd-mcp",
+    "source": "github",
+    "id": "1463332506"
+  },
+  "icons": [
+    {
+      "src": "https://agentstackd.com/apple-touch-icon.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "180x180"
+      ]
+    },
+    {
+      "src": "https://agentstackd.com/favicon.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": [
+        "any"
+      ]
+    }
+  ],
   "remotes": [
-    { "type": "streamable-http", "url": "https://agentstackd.com/api/mcp" }
+    {
+      "type": "streamable-http",
+      "url": "https://agentstackd.com/api/mcp"
+    }
   ]
 }
