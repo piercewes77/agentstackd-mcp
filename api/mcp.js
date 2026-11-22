@@ -1,5 +1,5 @@
 // AgentStackd read-only MCP server (streamable HTTP, JSON responses, stateless). Added 2026-11-18.
-// Data is generated at build time by mcp_build.py into api/_lib/data.json. No auth, no writes, no user data stored.
+// Data is generated at build time by mcp_build.py into api/_lib/data.json. No auth, no writes. Usage metadata (method, tool name, client, UA, country; argument keys and a short truncated query only) is logged to stdout and, when KV_REST_API_URL + KV_REST_API_TOKEN (or UPSTASH_REDIS_REST_*) are set, appended to Upstash Redis. Daily counter keys use America/New_York dates. IPs, auth headers and full arguments are not logged.
 "use strict";
 const DATA = require("./_lib/data.json");
 const SITE = DATA.site;
@@ -29,10 +29,60 @@ const str = (v, max, name, required) => {
 };
 const norm = s => (s || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
 const slugify = s => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+function words(s) {
+  return norm(String(s || "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")).split(" ").filter(Boolean);
+}
+function editDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  const dp = Array.from({ length: m + 1 }, (_, i) => i);
+  for (let j = 1; j <= n; j++) {
+    let prev = dp[0]; dp[0] = j;
+    for (let i = 1; i <= m; i++) {
+      const tmp = dp[i];
+      dp[i] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[i], dp[i - 1]);
+      prev = tmp;
+    }
+  }
+  return dp[m];
+}
+function scoreTool(key, t) {
+  const qSlug = slugify(key), qNorm = norm(key), qWords = words(key);
+  if (!qSlug) return 0;
+  const tSlug = t.slug, tNorm = norm(t.name), tWords = words(t.name);
+  if (tSlug === qSlug || slugify(t.name) === qSlug) return 1000;
+  let score = 0;
+  if (tNorm === qNorm) score = Math.max(score, 950);
+  if (tSlug.startsWith(qSlug) || tNorm.startsWith(qNorm)) score = Math.max(score, 800);
+  const wordHit = tWords.includes(qSlug) || tWords.includes(qNorm) || (qWords.length && qWords.every(w => tWords.includes(w)));
+  if (wordHit) score = Math.max(score, 740 + Math.round(80 * (qWords.length / Math.max(tWords.length, 1))));
+  if (tSlug.split("-").includes(qSlug)) score = Math.max(score, 760);
+  if (tWords.some(w => w.startsWith(qNorm)) || tSlug.split("-").some(part => part.startsWith(qSlug))) score = Math.max(score, 600);
+  if (tNorm.includes(qNorm) || tSlug.includes(qSlug)) score = Math.max(score, 520);
+  const sim = 1 - editDistance(qSlug, tSlug) / Math.max(qSlug.length, tSlug.length, 1);
+  const nameSim = 1 - editDistance(qNorm, tNorm) / Math.max(qNorm.length, tNorm.length, 1);
+  score = Math.max(score, Math.round(Math.max(sim, nameSim) * 400));
+  return score;
+}
+function suggestTools(key, n) {
+  return DATA.tools.map(t => ({ t, score: scoreTool(key, t) }))
+    .filter(x => x.score >= 250)
+    .sort((a, b) => b.score - a.score || a.t.name.localeCompare(b.t.name))
+    .slice(0, n || 3)
+    .map(x => ({ slug: x.t.slug, name: x.t.name, page_url: x.t.page_url }));
+}
 function findTool(key) {
   const s = slugify(key);
+  if (!s) return null;
   if (BY_SLUG.has(s)) return BY_SLUG.get(s);
-  return DATA.tools.find(t => slugify(t.name) === s) || null;
+  const exact = DATA.tools.find(t => slugify(t.name) === s);
+  if (exact) return exact;
+  const ranked = DATA.tools.map(t => ({ t, score: scoreTool(key, t) })).sort((a, b) => b.score - a.score || a.t.name.localeCompare(b.t.name));
+  return ranked[0] && ranked[0].score >= 500 ? ranked[0].t : null;
+}
+function suggestMessage(key) {
+  const s = suggestTools(key, 3);
+  return s.length ? ` Did you mean ${s.map(x => x.name).join(", ")}?` : "";
 }
 const summary = t => ({ slug: t.slug, name: t.name, category: t.category_name, pricing_model: t.pricing_model, description: t.description, page_url: t.page_url, website: t.website });
 const RO = { readOnlyHint: true, openWorldHint: false };
@@ -47,11 +97,11 @@ const TOOLS = [
       limit: { type: "integer", minimum: 1, maximum: 25, description: "Max results (default 10)." } }, required: ["query"], additionalProperties: false },
     annotations: RO },
   { name: "get_tool", title: "Get tool details",
-    description: "Get one tool's AgentStackd listing: pricing model, description, pros, limitations, vendor sources (with the date they were checked), related comparisons and the agentstackd.com page URL.",
-    inputSchema: { type: "object", properties: { slug: { type: "string", maxLength: MAX_SLUG, description: "Tool slug (e.g. 'cursor', 'claude-code') or exact tool name." } }, required: ["slug"], additionalProperties: false },
+    description: "Get one tool's AgentStackd listing: pricing model, description, pros, limitations, vendor sources (with the date they were checked), related comparisons and the agentstackd.com page URL. Accepts a slug or a partial name (e.g. 'Copilot'). If nothing matches, the error includes 'did you mean' suggestions.",
+    inputSchema: { type: "object", properties: { slug: { type: "string", maxLength: MAX_SLUG, description: "Tool slug or name (e.g. 'cursor', 'claude-code', 'Copilot'). Partial names are OK." } }, required: ["slug"], additionalProperties: false },
     annotations: RO },
   { name: "compare_tools", title: "Compare tools",
-    description: "Compare 2 or 3 tools side by side: category, pricing model, pros, limitations and sources, plus any AgentStackd head-to-head comparison page that covers them.",
+    description: "Compare 2 or 3 tools side by side: category, pricing model, pros, limitations and sources, plus any AgentStackd head-to-head comparison page that covers them. Partial names are OK. If some names are not listed, returns the tools that were found plus a not_listed array with suggestions.",
     inputSchema: { type: "object", properties: { slugs: { type: "array", items: { type: "string", maxLength: MAX_SLUG }, minItems: 2, maxItems: 3, description: "2 or 3 tool slugs or names." } }, required: ["slugs"], additionalProperties: false },
     annotations: RO },
   { name: "list_categories", title: "List categories",
@@ -293,20 +343,32 @@ function searchTools(a) {
 function getTool(a) {
   const key = str(a.slug, MAX_SLUG, "slug", true);
   const t = findTool(key);
-  if (!t) throw new ArgError(`no tool found for '${key}'. Use search_tools to find the slug.`);
+  if (!t) throw new ArgError(`no tool found for '${key}'.` + suggestMessage(key) + " Use search_tools to find the slug.");
   return { ...t, disclaimer: "Plans and prices change; confirm on the vendor's site." };
 }
 function compareTools(a) {
   if (!Array.isArray(a.slugs) || a.slugs.length < 2 || a.slugs.length > 3) throw new ArgError("'slugs' must be an array of 2 or 3 tool slugs");
-  const ts = a.slugs.map((s, i) => { const k = str(s, MAX_SLUG, `slugs[${i}]`, true); const t = findTool(k); if (!t) throw new ArgError(`no tool found for '${k}'`); return t; });
+  const ts = [], not_listed = [];
+  a.slugs.forEach((s, i) => {
+    const k = str(s, MAX_SLUG, `slugs[${i}]`, true);
+    const t = findTool(k);
+    if (t) ts.push(t);
+    else not_listed.push({ query: k, suggestions: suggestTools(k, 3) });
+  });
+  if (!ts.length) {
+    const hints = not_listed.map(n => `'${n.query}'` + (n.suggestions.length ? ` (did you mean ${n.suggestions.map(x => x.name).join(", ")})` : "")).join("; ");
+    throw new ArgError("no listed tools found for " + hints + ". Use search_tools to find slugs.");
+  }
   const names = ts.map(t => t.name), pages = new Map();
   for (const t of ts) for (const c of t.comparisons || []) {
     const covered = names.filter(n => c.title.replace(" (2026)", "").split(" vs ").map(x => x.trim()).includes(n));
     if (covered.length >= 2) pages.set(c.url, c);
   }
-  return { tools: ts.map(t => ({ slug: t.slug, name: t.name, category: t.category_name, pricing_model: t.pricing_model, description: t.description,
+  const out = { tools: ts.map(t => ({ slug: t.slug, name: t.name, category: t.category_name, pricing_model: t.pricing_model, description: t.description,
     best_for: t.best_for || null, pros: t.pros || [], limitations: t.limitations || [], sources: t.sources || [], sources_checked: t.sources_checked || null, page_url: t.page_url })),
     head_to_head_pages: [...pages.values()], disclaimer: "Plans and prices change; confirm on each vendor's site." };
+  if (not_listed.length) out.not_listed = not_listed;
+  return out;
 }
 const listCategories = () => ({ categories: DATA.categories, all_tools_url: `${SITE}/` });
 const newReleases = () => ({ added_to_agentstackd: DATA.new_added, tools: DATA.new_releases.map(n => ({ ...summary(BY_SLUG.get(n.slug)), released: n.released })) });
@@ -359,6 +421,83 @@ function readRaw(req) {
   });
 }
 
+
+// America/New_York calendar date (YYYY-MM-DD) for daily Redis counters.
+function etDate(d) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(d || new Date());
+}
+function redisField(prefix, value) {
+  return prefix + ":" + String(value).slice(0, 80).replace(/[\r\n]/g, " ");
+}
+
+// Persist one usage line to Upstash via the REST pipeline. Swallows all errors. 300ms timeout.
+async function persistUsage(line) {
+  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return;
+  const date = etDate();
+  const countKey = "mcp:count:" + date;
+  const pipeline = [
+    ["LPUSH", "mcp:log", JSON.stringify(line)],
+    ["LTRIM", "mcp:log", 0, 19999],
+    ["HINCRBY", countKey, redisField("method", line.method || "unknown"), 1]
+  ];
+  if (line.tool) pipeline.push(["HINCRBY", countKey, redisField("tool", line.tool), 1]);
+  if (line.client) pipeline.push(["HINCRBY", countKey, redisField("client", line.client), 1]);
+  if (line.country) pipeline.push(["HINCRBY", countKey, redisField("country", line.country), 1]);
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 300);
+  try {
+    await fetch(String(url).replace(/\/$/, "") + "/pipeline", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify(pipeline),
+      signal: ac.signal
+    });
+  } catch (e) { /* never break the request */ }
+  finally { clearTimeout(t); }
+}
+
+function getWaitUntil() {
+  try { return require("@vercel/functions").waitUntil; } catch (e) { return null; }
+}
+
+// One compact JSON line per parsed JSON-RPC call. Never throws, never logs IPs/auth/full args.
+async function logUsage(req, msg, r) {
+  try {
+    const method = msg && typeof msg.method === "string" ? msg.method : "unknown";
+    const params = (msg && msg.params && typeof msg.params === "object" && !Array.isArray(msg.params)) ? msg.params : {};
+    const line = { ts: new Date().toISOString(), event: "mcp_rpc", method };
+    if (method === "tools/call") {
+      if (typeof params.name === "string") line.tool = params.name.slice(0, 80);
+      const args = params.arguments;
+      if (args && typeof args === "object" && !Array.isArray(args)) {
+        line.arg_keys = Object.keys(args).slice(0, 20);
+        if (typeof args.query === "string") line.query = args.query.slice(0, 80);
+      }
+    }
+    if (method === "initialize") {
+      const ci = params.clientInfo;
+      if (ci && typeof ci === "object") {
+        if (typeof ci.name === "string") line.client = ci.name.slice(0, 80);
+        if (typeof ci.version === "string") line.client_version = ci.version.slice(0, 40);
+      }
+    }
+    const ua = req.headers && req.headers["user-agent"];
+    if (typeof ua === "string" && ua) line.ua = ua.slice(0, 200);
+    const country = req.headers && req.headers["x-vercel-ip-country"];
+    if (typeof country === "string" && country) line.country = country.slice(0, 8);
+    if (r && r.notification) line.outcome = "notification";
+    else if (r && r.err) line.outcome = "error";
+    else line.outcome = "ok";
+    console.log(JSON.stringify(line));
+    const pending = persistUsage(line);
+    const waitUntil = getWaitUntil();
+    if (typeof waitUntil === "function") waitUntil(pending);
+    else await pending;
+  } catch (e) { /* logging must never break the response */ }
+}
+
 async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
@@ -387,10 +526,13 @@ async function handler(req, res) {
   } catch (e) { return send(res, 400, rpcErr(null, -32700, "Parse error")); }
   if (Array.isArray(msg)) return send(res, 400, rpcErr(null, -32600, "Batch requests are not supported"));
   const r = rpc(msg);
+  await logUsage(req, msg, r);
   if (r.notification) return send(res, 202, null);
   if (r.err) return send(res, r.err[0] === -32600 ? 400 : 200, rpcErr(r.id === undefined ? null : r.id, r.err[0], r.err[1]));
   return send(res, 200, { jsonrpc: "2.0", id: r.id, result: r.result });
 }
 module.exports = handler;
 module.exports.searchTools = searchTools;
+module.exports.suggestTools = suggestTools;
+module.exports.findTool = findTool;
 

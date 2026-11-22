@@ -19,17 +19,17 @@ Arguments:
 - `max_price` (string, optional) — Pricing ceiling: `free` (Free or Open source only), `freemium` (also tools with a free plan), or `paid` (everything). The directory records pricing models, not dollar amounts.
 - `limit` (integer, optional) — Max results, 1–25 (default 10).
 
-**get_tool** — Get one tool's listing: pricing model, description, pros, limitations, vendor sources (with the date they were checked), related comparisons and the agentstackd.com page URL.
+**get_tool** — Get one tool's listing: pricing model, description, pros, limitations, vendor sources (with the date they were checked), related comparisons and the agentstackd.com page URL. Looks up a slug or name with case-insensitive, prefix and substring matching (for example `"Copilot"`, `"Codex"` or `"Apollo"`). If nothing matches, the error includes "did you mean" suggestions for the closest listed tools.
 
 Arguments:
 
-- `slug` (string, required) — Tool slug (e.g. `"cursor"`, `"claude-code"`) or exact tool name.
+- `slug` (string, required) — Tool slug or name (e.g. `"cursor"`, `"claude-code"`, `"Copilot"`). Partial names are OK.
 
-**compare_tools** — Compare 2 or 3 tools side by side: category, pricing model, pros, limitations and sources, plus any AgentStackd head-to-head comparison page that covers them.
+**compare_tools** — Compare 2 or 3 tools side by side: category, pricing model, pros, limitations and sources, plus any AgentStackd head-to-head comparison page that covers them. Partial names are OK. If some names are not in the directory, the tools that were found are still returned, along with a `not_listed` array of the missing queries and any "did you mean" suggestions. The call only errors if none of the names are listed.
 
 Arguments:
 
-- `slugs` (array of 2 or 3 strings, required) — Tool slugs or names, e.g. `["claude-code", "openai-codex"]`.
+- `slugs` (array of 2 or 3 strings, required) — Tool slugs or names, e.g. `["Cursor", "Windsurf", "Claude Code"]`.
 
 **list_categories** — Categories with descriptions, tool counts and page URLs. No arguments.
 
@@ -80,11 +80,24 @@ Add this to `~/.cursor/mcp.json` (or `.cursor/mcp.json` in a project):
 
 ### VS Code
 
-Add this to `.mcp.json` at your workspace root, or to `~/.copilot/mcp-config.json` for all workspaces. You can also use Chat: Open Customizations → MCP Servers → Add Server, choose HTTP, and paste the endpoint URL:
+Current VS Code docs put this in `.mcp.json` at your workspace root, or in `~/.copilot/mcp-config.json` for all workspaces. Both use a top-level `mcpServers` key. You can also use Chat: Open Customizations → MCP Servers → Add Server, choose HTTP, and paste the endpoint URL:
 
 ```json
 {
   "mcpServers": {
+    "agentstackd": {
+      "type": "http",
+      "url": "https://agentstackd.com/api/mcp"
+    }
+  }
+}
+```
+
+If you still use the older editor-managed file `.vscode/mcp.json` (the Local harness, deprecated and scheduled for removal in February 2027), the same server goes under a top-level `servers` key:
+
+```json
+{
+  "servers": {
     "agentstackd": {
       "type": "http",
       "url": "https://agentstackd.com/api/mcp"
@@ -100,6 +113,7 @@ Once connected, you can ask things like:
 - Search AgentStackd for free coding agents.
 - What's the pricing model and limitations of Cursor?
 - Compare Claude Code and OpenAI Codex.
+- Get the listing for Copilot.
 - What categories does AgentStackd cover?
 - Which tools were added recently?
 
